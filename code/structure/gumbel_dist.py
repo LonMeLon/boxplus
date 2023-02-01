@@ -16,25 +16,17 @@ class GradNorm(torch.autograd.Function):
         return torch.sum(torch.log(input), dim=-1) + torch.log(torch.tensor(1.0))
 
     @staticmethod
-    def backward(ctx, grad_output):
+    def backward(ctx, grad_chain):
         input, = ctx.saved_tensors
-        # grad: dlogp / dx; (1 / p) * grad: dp / dx
-        margin =  torch.finfo(torch.FloatTensor([1.0]).dtype).max  # type: ignore
-        log_margin = float(int(np.log(margin)))
-        ### 1 / p
-        ValueIntersectDist = torch.sum(torch.log(input), dim=-1) + torch.log(torch.tensor(1.0))
-        one = torch.exp((-ValueIntersectDist).clamp_max(log_margin))
-        #print("one", one)
-        ### grad: dp / dx
-        two = (1.0 / one).reshape(-1, 1).repeat(1, input.shape[1]) / input
-        #two_norm = torch.min(input, -1).values.reshape(-1, 1).repeat(1, input.shape[1]) / input  #two  / torch.max(two, -1).values.reshape(-1, 1).repeat(1, two.shape[1])
-        two_norm = two.clamp_min(1e-2)
-        ###
-        #print(grad_output.shape)
-        #print(one.shape, two.shape)
-        grad_input = grad_output.reshape(-1, 1).repeat(1, input.shape[1]) * one.reshape(-1, 1).repeat(1, input.shape[1]) * two_norm
-        #grad_input = grad_output * (-torch.exp(-input)/input)
-        return grad_input
+        # = 1 / X_i [batch, dim]
+        log_FX = torch.sum(torch.log(input), dim=-1) + torch.log(torch.tensor(1.0))
+        FX = torch.exp(log_FX) #[batch, ]
+        grad_input = 1. / input
+        max_grad_input = torch.max(grad_input, 1).values.reshape(-1, 1).repeat(1, input.shape[1])
+        norm_grad_input = (grad_input / max_grad_input) * (1e-2 / FX).reshape(-1, 1).repeat(1, input.shape[1])
+
+        #print(norm_grad_input.shape, grad_chain.shape)
+        return norm_grad_input * grad_chain.reshape(-1, 1).repeat(1, input.shape[1])
 
 class GumbelBoxDist(nn.Module):
     def __init__(self, vocab_size, embed_dim, num_class, min_init_value, delta_init_value, args):
